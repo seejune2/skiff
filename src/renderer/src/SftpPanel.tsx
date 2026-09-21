@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { RemoteEntry, Transfer } from '../../shared/types'
+import type { RemoteEdit, RemoteEntry, Transfer } from '../../shared/types'
 import { cleanError } from './TerminalTab'
 
 interface Props {
@@ -34,6 +34,7 @@ export function SftpPanel({ connId }: Props) {
   const [transfers, setTransfers] = useState<Transfer[]>([])
   const [loading, setLoading] = useState(false)
   const [dropping, setDropping] = useState(false)
+  const [edits, setEdits] = useState<RemoteEdit[]>([])
 
   const open = useCallback(
     async (target: string) => {
@@ -60,6 +61,13 @@ export function SftpPanel({ connId }: Props) {
     setPath('')
     if (connId) void open('.')
   }, [connId, open])
+
+  useEffect(() => {
+    void window.api.edits.list().then(setEdits)
+    return window.api.edits.onStatus((s) =>
+      setEdits((old) => (s.state === 'closed' ? old.filter((o) => o.local !== s.local) : [...old.filter((o) => o.local !== s.local), s]))
+    )
+  }, [])
 
   useEffect(
     () =>
@@ -96,9 +104,10 @@ export function SftpPanel({ connId }: Props) {
     void run(() => window.api.sftp.delete(connId, join(path, e.name), e.type === 'dir'))
   }
 
+  // 파일 더블클릭 = 편집기로 열기. 저장하면 자동으로 다시 올라간다.
   const activate = (e: RemoteEntry) => {
     if (!connId) return
-    if (e.type === 'file') window.api.sftp.download(connId, join(path, e.name)).catch((err: Error) => setError(cleanError(err)))
+    if (e.type === 'file') window.api.edits.open(connId, join(path, e.name)).catch((err: Error) => setError(cleanError(err)))
     else void open(join(path, e.name))
   }
 
@@ -164,7 +173,7 @@ export function SftpPanel({ connId }: Props) {
             className={`sftp-row ${selected === e.name ? 'selected' : ''}`}
             onClick={() => setSelected(e.name)}
             onDoubleClick={() => activate(e)}
-            title={e.type === 'file' ? '더블클릭: 다운로드' : '더블클릭: 열기'}
+            title={e.type === 'file' ? '더블클릭: 편집기로 열기 (저장하면 자동 업로드)' : '더블클릭: 열기'}
           >
             <span className="sftp-icon">{e.type === 'dir' ? '📁' : e.type === 'link' ? '🔗' : '📄'}</span>
             {editing?.original === e.name ? (
@@ -201,6 +210,31 @@ export function SftpPanel({ connId }: Props) {
           </div>
         ))}
       </div>
+      {edits.filter((e) => e.connId === connId).length > 0 && (
+        <div className="transfers">
+          {edits
+            .filter((e) => e.connId === connId)
+            .map((e) => (
+              <div key={e.local} className={`transfer ${e.state === 'error' ? 'error' : ''}`}>
+                <div className="transfer-head">
+                  <span className="transfer-name" title={e.local}>
+                    ✎ {e.remote.split('/').pop()}
+                  </span>
+                  <span className="muted">
+                    {e.state === 'open' && '편집 중'}
+                    {e.state === 'uploading' && '올리는 중'}
+                    {e.state === 'saved' && '저장됨'}
+                    {e.state === 'error' && '실패'}
+                  </span>
+                  <button className="link" onClick={() => window.api.edits.close(e.local)}>
+                    닫기
+                  </button>
+                </div>
+                {e.message && <p className="error small">{e.message}</p>}
+              </div>
+            ))}
+        </div>
+      )}
       {mine.length > 0 && (
         <div className="transfers">
           <div className="transfer-head">

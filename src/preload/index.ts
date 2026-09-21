@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
-import type { ConnStatus, LocalProfile, Settings, Snippet, PromptReply, PromptRequest, RemoteEntry, Session, SessionInput, Transfer, TunnelStatus } from '../shared/types'
+import type { ConnStatus, LocalProfile, RemoteEdit, Settings, Snippet, PromptReply, PromptRequest, RemoteEntry, Session, SessionInput, Transfer, TunnelStatus } from '../shared/types'
 
 function on<A extends unknown[]>(channel: string, listener: (...args: A) => void): () => void {
   const wrapped = (_e: IpcRendererEvent, ...args: unknown[]) => listener(...(args as A))
@@ -46,6 +46,12 @@ const api = {
     retry: (id: string) => ipcRenderer.send('sftp:retry', id),
     forget: (id: string) => ipcRenderer.send('sftp:forget', id),
     onTransfer: (listener: (t: Transfer) => void) => on('sftp:transfer', listener)
+  },
+  edits: {
+    open: (connId: string, remote: string): Promise<string> => ipcRenderer.invoke('edit:open', connId, remote),
+    list: (): Promise<RemoteEdit[]> => ipcRenderer.invoke('edit:list'),
+    close: (local: string) => ipcRenderer.send('edit:close', local),
+    onStatus: (listener: (s: RemoteEdit) => void) => on('edit:status', listener)
   },
   settings: {
     get: (): Promise<Settings> => ipcRenderer.invoke('settings:get'),

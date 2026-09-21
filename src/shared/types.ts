@@ -45,6 +45,16 @@ export interface LocalProfile {
   name: string
 }
 
+export interface RemoteEdit {
+  connId: string
+  /** 원격 경로 */
+  remote: string
+  /** 임시 폴더의 로컬 경로. 닫을 때 이 값으로 지정한다. */
+  local: string
+  state: 'open' | 'uploading' | 'saved' | 'error' | 'closed'
+  message?: string
+}
+
 export interface Snippet {
   id: string
   name: string

@@ -7,9 +7,10 @@ import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, posix } from 'node:path'
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
 import { autoUpdater } from 'electron-updater'
-import type { ConnStatus, PromptBody, PromptReply, Session, Snippet, Transfer } from '../shared/types'
+import type { ConnStatus, PromptBody, PromptReply, RemoteEdit, Session, Snippet, Transfer } from '../shared/types'
 import { readJson, writeJson } from './jsonFile'
 import { KnownHosts } from './knownHosts'
+import { RemoteEdits } from './edits'
 import { LocalShells } from './local'
 import { SessionLogs } from './logs'
 import { Secrets } from './secrets'
@@ -49,8 +50,13 @@ const termData = (connId: string, data: Uint8Array) => {
   logs.write(connId, data)
   send('ssh:data', connId, data)
 }
+const edits = new RemoteEdits(join(app.getPath('temp'), 'skiff-edit'), (connId) => ssh.sftp(connId), (s) => send('edit:status', s))
+
 const termStatus = (status: ConnStatus) => {
-  if (status.state === 'closed' || status.state === 'error') logs.stop(status.connId)
+  if (status.state === 'closed' || status.state === 'error') {
+    logs.stop(status.connId)
+    edits.closeAll(status.connId)
+  }
   send('ssh:status', status)
 }
 
@@ -370,6 +376,18 @@ function registerIpc(): void {
     writeJson(snippetsPath, { version: 1, snippets })
     return snippets
   })
+  ipcMain.handle('edit:open', async (_e, connId: unknown, remote: unknown) => {
+    if (!isId(connId) || !isPath(remote)) throw new Error('잘못된 요청입니다.')
+    const local = await edits.open(connId, remote)
+    // 확장자에 연결된 프로그램으로 연다. 없으면 오류 문구가 돌아온다.
+    const err = await shell.openPath(local)
+    if (err) throw new Error(`편집기를 열 수 없습니다: ${err}`)
+    return local
+  })
+  ipcMain.handle('edit:list', () => edits.list())
+  ipcMain.on('edit:close', (_e, local: unknown) => {
+    if (isPath(local)) void edits.close(local)
+  })
   ipcMain.handle('settings:get', () => settings.get())
   ipcMain.handle('settings:save', (_e, input: unknown) => settings.save(input))
   ipcMain.handle('local:profiles', () => local.list())
@@ -438,6 +456,7 @@ function createWindow(): void {
     pendingPrompts.clear()
     ssh.disconnectAll()
     local.killAll()
+    edits.closeAll()
   })
 
   if (process.env.ELECTRON_RENDERER_URL) void win.loadURL(process.env.ELECTRON_RENDERER_URL)
