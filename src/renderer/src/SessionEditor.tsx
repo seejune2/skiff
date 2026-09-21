@@ -5,13 +5,15 @@ import { cleanError } from './TerminalTab'
 interface Props {
   session: Session | null
   groups: string[]
+  /** 점프 호스트 후보 */
+  sessions: Session[]
   onSaved(session: Session, connect: boolean): void
   onClose(): void
 }
 
 const empty: SessionInput = { name: '', group: '', host: '', port: 22, username: '', authType: 'password', privateKeyPath: '', x11: false, tunnels: [] }
 
-export function SessionEditor({ session, groups, onSaved, onClose }: Props) {
+export function SessionEditor({ session, groups, sessions, onSaved, onClose }: Props) {
   const [form, setForm] = useState<SessionInput>(session ?? empty)
   const [error, setError] = useState('')
   const [hasPassword, setHasPassword] = useState(false)
@@ -119,6 +121,19 @@ export function SessionEditor({ session, groups, onSaved, onClose }: Props) {
           <label className="check span4">
             <input type="checkbox" checked={!!form.x11} onChange={(e) => set('x11', e.target.checked)} />
             X11 포워딩 (virt-manager 같은 GUI 프로그램을 내 화면에 띄움)
+          </label>
+          <label className="field span4">
+            <span>점프 호스트 (이 서버에 가기 전에 거칠 세션)</span>
+            <select value={form.jumpSessionId ?? ''} onChange={(e) => set('jumpSessionId', e.target.value || undefined)}>
+              <option value="">사용 안 함</option>
+              {sessions
+                .filter((s) => s.id !== form.id && s.protocol !== 'rdp' && !s.jumpSessionId)
+                .map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} ({s.username}@{s.host})
+                  </option>
+                ))}
+            </select>
           </label>
           <div className="field span4">
             <span>포트포워딩 (내 PC 쪽은 127.0.0.1에만 열림)</span>

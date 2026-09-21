@@ -14,6 +14,8 @@ export interface Session {
   /** 없으면 ssh. rdp는 Windows 원격 데스크톱(mstsc)으로 연다. */
   protocol?: 'ssh' | 'rdp'
   tunnels?: TunnelRule[]
+  /** 이 세션에 들어갈 때 먼저 거칠 다른 저장된 세션의 id */
+  jumpSessionId?: string
   /** + 탭에서 ssh 명령으로 연 임시 세션. 저장하지 않는다. */
   temp?: boolean
 }

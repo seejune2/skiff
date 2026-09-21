@@ -12,13 +12,17 @@ interface Props {
   onConnect(session: Session): void
   onEdit(session: Session): void
   onDelete(session: Session): void
+  onDuplicate(session: Session): void
+  /** 그룹으로 끌어다 놓아 옮기기 */
+  onMove(session: Session, group: string): void
 }
 
 const DEFAULT_GROUP = '기본'
 
-export function Sidebar({ width, compact, onToggleCompact, onHide, sessions, selectedId, onSelect, onConnect, onEdit, onDelete }: Props) {
+export function Sidebar({ width, compact, onToggleCompact, onHide, sessions, selectedId, onSelect, onConnect, onEdit, onDelete, onDuplicate, onMove }: Props) {
   const [query, setQuery] = useState('')
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+  const [dropGroup, setDropGroup] = useState<string | null>(null)
 
   const groups = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -58,7 +62,21 @@ export function Sidebar({ width, compact, onToggleCompact, onHide, sessions, sel
           const open = query !== '' || !collapsed.has(group)
           return (
             <div key={group}>
-              <button className="group-header" onClick={() => toggle(group)}>
+              <button
+                className={`group-header ${dropGroup === group ? 'drop' : ''}`}
+                onClick={() => toggle(group)}
+                onDragOver={(e) => {
+                  e.preventDefault()
+                  setDropGroup(group)
+                }}
+                onDragLeave={() => setDropGroup(null)}
+                onDrop={(e) => {
+                  e.preventDefault()
+                  setDropGroup(null)
+                  const moved = sessions.find((s) => s.id === e.dataTransfer.getData('text/session'))
+                  if (moved) onMove(moved, group === DEFAULT_GROUP ? '' : group)
+                }}
+              >
                 <span className="caret">{open ? '▾' : '▸'}</span>
                 {group}
                 <span className="count">{list.length}</span>
@@ -67,6 +85,8 @@ export function Sidebar({ width, compact, onToggleCompact, onHide, sessions, sel
                 list.map((s) => (
                   <div
                     key={s.id}
+                    draggable
+                    onDragStart={(e) => e.dataTransfer.setData('text/session', s.id)}
                     className={`session-item ${s.id === selectedId ? 'selected' : ''}`}
                     onClick={() => onSelect(s.id)}
                     onDoubleClick={() => onConnect(s)}
@@ -85,6 +105,9 @@ export function Sidebar({ width, compact, onToggleCompact, onHide, sessions, sel
                     <div className="session-actions">
                       <button title="편집" onClick={(e) => (e.stopPropagation(), onEdit(s))}>
                         ✎
+                      </button>
+                      <button title="복제" onClick={(e) => (e.stopPropagation(), onDuplicate(s))}>
+                        ⧉
                       </button>
                       <button title="삭제" onClick={(e) => (e.stopPropagation(), onDelete(s))}>
                         🗑

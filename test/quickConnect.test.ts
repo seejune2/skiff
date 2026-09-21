@@ -16,3 +16,28 @@ it('ssh 명령을 세션으로 바꾼다', () => {
   expect(parseSsh('ls')).toContain('알 수 없는 명령')
   expect(parseSsh('ssh -o Foo=1 a@b')).toContain('-o')
 })
+
+import { parseSshConfig } from '../src/main/sshConfig'
+
+it('ssh config의 Host 블록을 세션으로 바꾼다', () => {
+  const list = parseSshConfig(
+    [
+      '# 주석',
+      'Host *',
+      '  ServerAliveInterval 60',
+      'Host bastion',
+      '  HostName 10.0.1.111',
+      '  User root',
+      '  Port 2222',
+      'Host inner',
+      '  HostName 192.168.0.5',
+      '  User admin',
+      '  IdentityFile /keys/id_ed25519',
+      '  ForwardX11 yes',
+      '  ProxyJump root@bastion:22'
+    ].join('\n')
+  )
+  expect(list.map((s) => s.name)).toEqual(['bastion', 'inner'])
+  expect(list[0]).toMatchObject({ host: '10.0.1.111', username: 'root', port: 2222, authType: 'password' })
+  expect(list[1]).toMatchObject({ host: '192.168.0.5', authType: 'key', privateKeyPath: '/keys/id_ed25519', x11: true, jumpHostName: 'bastion' })
+})

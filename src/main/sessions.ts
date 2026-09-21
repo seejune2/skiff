@@ -57,7 +57,8 @@ export function validateSession(input: unknown): SessionInput {
     authType,
     privateKeyPath: authType === 'key' ? privateKeyPath : '',
     x11: o.x11 === true,
-    tunnels: validateTunnels(o.tunnels)
+    tunnels: validateTunnels(o.tunnels),
+    jumpSessionId: typeof o.jumpSessionId === 'string' && o.jumpSessionId !== o.id ? o.jumpSessionId : undefined
   }
 }
 

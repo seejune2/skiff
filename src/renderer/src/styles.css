@@ -843,3 +843,8 @@ select {
   overflow-x: auto;
   line-height: 1.4;
 }
+
+.group-header.drop {
+  background: var(--accent-soft);
+  color: var(--accent);
+}

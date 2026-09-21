@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { readFile, stat } from 'node:fs/promises'
-import { Client, utils, type ClientChannel, type SFTPWrapper, type KeyboardInteractiveCallback, type Prompt } from 'ssh2'
+import type { Duplex } from 'node:stream'
+import { Client, utils, type ClientChannel, type ConnectConfig, type SFTPWrapper, type KeyboardInteractiveCallback, type Prompt } from 'ssh2'
 import type { ConnState, ConnStatus, PromptBody, PromptReply, Session, TunnelStatus } from '../shared/types'
 import { fingerprint, keyType, type KnownHosts } from './knownHosts'
 import { Tunnels } from './tunnels'
@@ -15,6 +16,8 @@ export interface SshDeps {
   onData(connId: string, data: Uint8Array): void
   onStatus(status: ConnStatus): void
   onTunnel(status: TunnelStatus): void
+  /** 점프 호스트로 쓸 저장된 세션을 찾는다. */
+  resolveSession(sessionId: string): Session | undefined
   /** 로컬 X 서버 TCP 포트와, 서버를 준비하고 문제가 있으면 안내 문구를 돌려주는 함수 */
   x11: { port: number; prepare(): Promise<string | null> }
 }
@@ -34,6 +37,8 @@ interface Conn {
   sftp?: Promise<SFTPWrapper>
   session: Session
   tunnels?: Tunnels
+  /** 점프 호스트 연결. 본 연결이 끝나면 같이 닫는다. */
+  jump?: Client
 }
 
 const MAX_PASSWORD_TRIES = 3
@@ -55,20 +60,116 @@ export class SshManager {
     }
     status('connecting')
 
+    let sock: Duplex | undefined
+    if (session.jumpSessionId) {
+      try {
+        const jump = this.deps.resolveSession(session.jumpSessionId)
+        if (!jump) throw new Error('점프 호스트 세션을 찾을 수 없습니다.')
+        status('connecting', `점프 호스트 ${jump.username}@${jump.host} 접속 중`)
+        conn.jump = await this.openJump(jump, connId)
+        sock = await new Promise<Duplex>((resolve, reject) =>
+          conn.jump!.forwardOut('127.0.0.1', 0, session.host, session.port, (err, ch) => (err ? reject(err) : resolve(ch)))
+        )
+      } catch (err) {
+        conn.jump?.end()
+        this.conns.delete(connId)
+        return status('error', `점프 호스트: ${(err as Error).message}`, { retryable: true })
+      }
+    }
+
+    const auth = await this.authConfig(session, connId, {
+      setFailure: (f) => (conn.failure ??= f),
+      cancel: (message) => fail(message),
+      onAuthStart: () => status('authenticating')
+    })
+    if (!auth || conn.ended) {
+      conn.jump?.end()
+      this.conns.delete(connId)
+      return status('closed', auth ? '연결이 종료되었습니다.' : '인증 입력을 취소했습니다.', { manual: true })
+    }
+
+    const { client } = conn
+    const notice = (text: string) => this.deps.onData(connId, Buffer.from(`\x1b[33m[X11] ${text}\x1b[0m\r\n`))
+    // 원격에는 가짜 쿠키를 주고, 들어오는 X11 연결에서 확인한 뒤 뗀다.
+    const fakeCookie = randomBytes(16)
+    client.on('x11', (_info, accept, reject) => {
+      if (!session.x11) return reject()
+      bridgeX11(accept(), fakeCookie, this.deps.x11.port)
+    })
+    const openShell = (x11: boolean, warning: string | null) => {
+      const x11Options = x11 ? { x11: { protocol: 'MIT-MAGIC-COOKIE-1', cookie: fakeCookie, single: false, screen: 0 } } : {}
+      client.shell({ term: 'xterm-256color', cols, rows }, x11Options, (err, stream) => {
+        // X11 요청만 거부되면 X11 없이 터미널은 연다.
+        if (err && x11) return openShell(false, '서버가 X11 포워딩을 거부했습니다. 서버의 /etc/ssh/sshd_config에 X11Forwarding yes가 있는지 확인하세요.')
+        if (err) return fail(`셸을 열 수 없습니다: ${err.message}`)
+        if (warning) notice(warning)
+        conn.stream = stream
+        stream.on('data', (d: Buffer) => this.deps.onData(connId, d))
+        stream.stderr.on('data', (d: Buffer) => this.deps.onData(connId, d))
+        stream.on('close', () => client.end())
+        status('connected')
+        conn.tunnels = new Tunnels(client)
+        for (const rule of session.tunnels ?? []) if (rule.autoStart) void this.startTunnel(connId, rule.id)
+      })
+    }
+    client.on('ready', async () => {
+      auth.afterReady()
+      openShell(!!session.x11, session.x11 ? await this.deps.x11.prepare() : null)
+    })
+    client.on('error', (err) => {
+      conn.failure ??= describeError(err)
+    })
+    client.on('close', () => {
+      conn.tunnels?.stopAll()
+      conn.jump?.end()
+      this.conns.delete(connId)
+      if (conn.failure) status('error', conn.failure.message, { manual: conn.ended, retryable: conn.failure.retryable && !conn.ended })
+      // 서버 쪽에서 끊긴 경우(로그아웃, 타임아웃)도 사용자가 끊은 게 아니면 다시 붙여 본다.
+      else status('closed', '연결이 종료되었습니다.', { manual: conn.ended, retryable: !conn.ended })
+    })
+
+    client.connect({ ...auth.config, sock })
+  }
+
+  /** 점프 호스트에 먼저 붙는다. 실패하면 throw. */
+  private async openJump(jump: Session, connId: string): Promise<Client> {
+    const client = new Client()
+    let failure: Failure | undefined
+    const auth = await this.authConfig(jump, connId, {
+      setFailure: (f) => (failure ??= f),
+      cancel: (message) => {
+        failure ??= { message, retryable: false }
+        client.end()
+      },
+      onAuthStart: () => {}
+    })
+    if (!auth) throw new Error('인증 입력을 취소했습니다.')
+    await new Promise<void>((resolve, reject) => {
+      client.on('ready', () => {
+        auth.afterReady()
+        resolve()
+      })
+      client.on('error', (err) => (failure ??= describeError(err)))
+      client.on('close', () => reject(new Error(failure?.message ?? '연결이 끊겼습니다.')))
+      client.connect(auth.config)
+    })
+    return client
+  }
+
+
+  /**
+   * 인증과 호스트 키 확인 설정을 만든다. 본 연결과 점프 호스트가 같이 쓴다.
+   * 개인키 암호나 비밀번호 입력을 취소하면 null.
+   */
+  private async authConfig(
+    session: Session,
+    connId: string,
+    handlers: { setFailure(f: Failure): void; cancel(message: string): void; onAuthStart(): void }
+  ): Promise<{ config: ConnectConfig; afterReady(): void } | null> {
     let key: { data: Buffer; passphrase?: string } | undefined
     if (session.authType === 'key') {
-      try {
-        key = await this.loadKey(connId, session.privateKeyPath)
-      } catch (err) {
-        this.conns.delete(connId)
-        status('error', (err as Error).message, { retryable: false })
-        return
-      }
-      if (!key || conn.ended) {
-        this.conns.delete(connId)
-        status('closed', key ? '연결이 종료되었습니다.' : '개인키 암호 입력을 취소했습니다.', { manual: true })
-        return
-      }
+      key = await this.loadKey(connId, session.privateKeyPath)
+      if (!key) return null
     }
 
     const target = `${session.username}@${session.host}`
@@ -119,87 +220,53 @@ export class SshManager {
         })
         .then((reply) => {
           if (Array.isArray(reply) && reply.length === prompts.length) finish(reply)
-          else fail('인증을 취소했습니다.')
+          else handlers.cancel('인증을 취소했습니다.')
         })
     }
 
-    const { client } = conn
-    const notice = (text: string) => this.deps.onData(connId, Buffer.from(`\x1b[33m[X11] ${text}\x1b[0m\r\n`))
-    // 원격에는 가짜 쿠키를 주고, 들어오는 X11 연결에서 확인한 뒤 뗀다.
-    const fakeCookie = randomBytes(16)
-    client.on('x11', (_info, accept, reject) => {
-      if (!session.x11) return reject()
-      bridgeX11(accept(), fakeCookie, this.deps.x11.port)
-    })
-    const openShell = (x11: boolean, warning: string | null) => {
-      const x11Options = x11 ? { x11: { protocol: 'MIT-MAGIC-COOKIE-1', cookie: fakeCookie, single: false, screen: 0 } } : {}
-      client.shell({ term: 'xterm-256color', cols, rows }, x11Options, (err, stream) => {
-        // X11 요청만 거부되면 X11 없이 터미널은 연다.
-        if (err && x11) return openShell(false, '서버가 X11 포워딩을 거부했습니다. 서버의 /etc/ssh/sshd_config에 X11Forwarding yes가 있는지 확인하세요.')
-        if (err) return fail(`셸을 열 수 없습니다: ${err.message}`)
-        if (warning) notice(warning)
-        conn.stream = stream
-        stream.on('data', (d: Buffer) => this.deps.onData(connId, d))
-        stream.stderr.on('data', (d: Buffer) => this.deps.onData(connId, d))
-        stream.on('close', () => client.end())
-        status('connected')
-        conn.tunnels = new Tunnels(client)
-        for (const rule of session.tunnels ?? []) if (rule.autoStart) void this.startTunnel(connId, rule.id)
-      })
-    }
-    client.on('ready', async () => {
-      if (passwordToSave !== null && lastPassword === passwordToSave) this.deps.passwords.save(session.id, passwordToSave)
-      openShell(!!session.x11, session.x11 ? await this.deps.x11.prepare() : null)
-    })
-    client.on('error', (err) => {
-      conn.failure ??= describeError(err)
-    })
-    client.on('close', () => {
-      conn.tunnels?.stopAll()
-      this.conns.delete(connId)
-      if (conn.failure) status('error', conn.failure.message, { manual: conn.ended, retryable: conn.failure.retryable && !conn.ended })
-      // 서버 쪽에서 끊긴 경우(로그아웃, 타임아웃)도 사용자가 끊은 게 아니면 다시 붙여 본다.
-      else status('closed', '연결이 종료되었습니다.', { manual: conn.ended, retryable: !conn.ended })
-    })
-
-    client.connect({
-      host: session.host,
-      port: session.port,
-      username: session.username,
-      // 사용자가 호스트 키와 비밀번호를 확인하는 동안 끊기지 않도록 준비 시간 제한을 두지 않는다.
-      readyTimeout: 0,
-      // 30초 안에 끊긴 걸 알아챈다.
-      keepaliveInterval: 10000,
-      keepaliveCountMax: 3,
-      hostVerifier: (hostKey: Buffer, verify: (ok: boolean) => void) => {
-        this.verifyHost(connId, session, hostKey).then(
-          (ok) => {
-            if (!ok) conn.failure ??= { message: '호스트 키를 신뢰하지 않아 연결을 중단했습니다.', retryable: false }
-            verify(ok)
-          },
-          () => verify(false)
-        )
+    return {
+      afterReady: () => {
+        if (passwordToSave !== null && lastPassword === passwordToSave) this.deps.passwords.save(session.id, passwordToSave)
       },
-      authHandler: (methodsLeft, _partial, next) => {
-        let method: string | undefined
-        while ((method = methods.shift())) {
-          if (!methodsLeft || methodsLeft.includes(method as never)) break
-        }
-        if (!method) return next(false as never)
-        status('authenticating')
-        const username = session.username
-        if (method === 'publickey') return next({ type: 'publickey', username, key: key!.data, passphrase: key!.passphrase })
-        if (method === 'keyboard-interactive') return next({ type: 'keyboard-interactive', username, prompt: keyboardInteractive })
-        askPassword().then((password) => {
-          if (password === null) {
-            conn.failure ??= { message: '인증을 취소했습니다.', retryable: false }
-            return next(false as never)
+      config: {
+        host: session.host,
+        port: session.port,
+        username: session.username,
+        // 사용자가 호스트 키와 비밀번호를 확인하는 동안 끊기지 않도록 준비 시간 제한을 두지 않는다.
+        readyTimeout: 0,
+        // 30초 안에 끊긴 걸 알아챈다.
+        keepaliveInterval: 10000,
+        keepaliveCountMax: 3,
+        hostVerifier: (hostKey: Buffer, verify: (ok: boolean) => void) => {
+          this.verifyHost(connId, session, hostKey).then(
+            (ok) => {
+              if (!ok) handlers.setFailure({ message: '호스트 키를 신뢰하지 않아 연결을 중단했습니다.', retryable: false })
+              verify(ok)
+            },
+            () => verify(false)
+          )
+        },
+        authHandler: (methodsLeft, _partial, next) => {
+          let method: string | undefined
+          while ((method = methods.shift())) {
+            if (!methodsLeft || methodsLeft.includes(method as never)) break
           }
-          lastPassword = password
-          next({ type: 'password', username, password })
-        })
+          if (!method) return next(false as never)
+          handlers.onAuthStart()
+          const username = session.username
+          if (method === 'publickey') return next({ type: 'publickey', username, key: key!.data, passphrase: key!.passphrase })
+          if (method === 'keyboard-interactive') return next({ type: 'keyboard-interactive', username, prompt: keyboardInteractive })
+          askPassword().then((password) => {
+            if (password === null) {
+              handlers.setFailure({ message: '인증을 취소했습니다.', retryable: false })
+              return next(false as never)
+            }
+            lastPassword = password
+            next({ type: 'password', username, password })
+          })
+        }
       }
-    })
+    }
   }
 
   /** 규칙 id는 연결된 세션의 저장된 규칙에서 찾는다 (renderer가 임의 규칙을 넘기지 못함). */

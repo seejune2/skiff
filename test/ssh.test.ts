@@ -104,6 +104,7 @@ function makeManager(
     onData: (_id, d) => (output += Buffer.from(d).toString('utf8')),
     onStatus: (s) => statuses.push(s),
     onTunnel,
+    resolveSession: (id) => jumpSessions.get(id),
     x11: { port: x11Port, prepare: async () => null }
   })
   const until = async (check: () => boolean) => {
@@ -124,6 +125,8 @@ const session = (port: number, extra: Partial<Session> = {}): Session => ({
   privateKeyPath: '',
   ...extra
 })
+
+const jumpSessions = new Map<string, Session>()
 
 let remoteForward: ((data: Buffer) => Promise<string>) | undefined
 
@@ -286,6 +289,35 @@ describe('X11', () => {
     expect(t.output()).toContain('X11Forwarding')
     t.manager.disconnect('c1')
   })
+})
+
+it('점프 호스트를 거쳐 접속한다', async () => {
+  const jumpServer = await startServer(utils.generateKeyPairSync('ed25519').private)
+  const target = await startServer(utils.generateKeyPairSync('ed25519').private)
+  servers.push(jumpServer, target)
+  const jump = session(jumpServer.port, { id: 'jump', name: '점프' })
+  jumpSessions.set('jump', jump)
+  const t = makeManager((b) => (b.kind === 'hostkey' ? true : null), PASSWORD)
+
+  await t.manager.connect(session(target.port, { id: 'target', jumpSessionId: 'jump' }), 'c1', 80, 24)
+  await t.until(() => lastState(t.statuses) === 'connected' && t.output().includes('ready'))
+  // 점프 호스트와 목적지 각각 호스트 키를 확인한다
+  expect(t.prompts.filter((p) => p.kind === 'hostkey')).toHaveLength(2)
+  expect(t.statuses.some((s) => s.message?.includes('점프 호스트'))).toBe(true)
+
+  t.manager.write('c1', '점프경유\n')
+  await t.until(() => t.output().includes('점프경유'))
+  t.manager.disconnect('c1')
+  await t.until(() => lastState(t.statuses) === 'closed')
+})
+
+it('점프 호스트 세션이 없으면 오류로 알린다', async () => {
+  const target = await startServer(utils.generateKeyPairSync('ed25519').private)
+  servers.push(target)
+  const t = makeManager(() => null, PASSWORD)
+  await t.manager.connect(session(target.port, { jumpSessionId: '없는-id' }), 'c1', 80, 24)
+  await t.until(() => lastState(t.statuses) === 'error')
+  expect(t.statuses.at(-1)?.message).toContain('점프 호스트 세션을 찾을 수 없습니다')
 })
 
 describe('터널', () => {

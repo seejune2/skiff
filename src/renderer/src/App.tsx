@@ -77,6 +77,7 @@ export function App() {
     document.documentElement.dataset.theme = settings.appTheme
   }, [settings.appTheme])
   const [snippets, setSnippets] = useState<Snippet[]>([])
+  const [sessionMenu, setSessionMenu] = useState<{ x: number; y: number } | null>(null)
   const [snippetMenu, setSnippetMenu] = useState<{ x: number; y: number } | null>(null)
   const [editingSnippets, setEditingSnippets] = useState(false)
   useEffect(() => void window.api.snippets.list().then(setSnippets), [])
@@ -288,6 +289,51 @@ export function App() {
         </button>
         <span className="brand">Skiff</span>
         <button onClick={() => setEditing('new')}>＋ 새 세션</button>
+        <button
+          title="세션 가져오기·내보내기"
+          onClick={(e) => {
+            const r = e.currentTarget.getBoundingClientRect()
+            setSessionMenu(sessionMenu ? null : { x: r.left, y: r.bottom })
+          }}
+        >
+          ⋯
+        </button>
+        {sessionMenu && (
+          <>
+            <div className="menu-backdrop" onClick={() => setSessionMenu(null)} />
+            <div className="menu" style={{ left: sessionMenu.x, top: sessionMenu.y }}>
+              <button
+                onClick={async () => {
+                  setSessionMenu(null)
+                  const n = await window.api.sessions.importSshConfig()
+                  await reload()
+                  if (n) window.alert(`SSH config에서 세션 ${n}개를 가져왔습니다.`)
+                }}
+              >
+                ~/.ssh/config 가져오기
+              </button>
+              <button
+                onClick={async () => {
+                  setSessionMenu(null)
+                  const n = await window.api.sessions.importFile()
+                  await reload()
+                  if (n) window.alert(`세션 ${n}개를 가져왔습니다.`)
+                }}
+              >
+                파일에서 가져오기
+              </button>
+              <button
+                onClick={async () => {
+                  setSessionMenu(null)
+                  const n = await window.api.sessions.exportAll()
+                  if (n) window.alert(`세션 ${n}개를 내보냈습니다. 비밀번호는 포함되지 않습니다.`)
+                }}
+              >
+                파일로 내보내기 (비밀번호 제외)
+              </button>
+            </div>
+          </>
+        )}
         <button disabled={!selected} onClick={() => selected && openTab(selected)}>
           ▶ 연결
         </button>
@@ -396,6 +442,15 @@ export function App() {
               onConnect={openTab}
               onEdit={setEditing}
               onDelete={deleteSession}
+              onDuplicate={async (s) => {
+                const { id: _id, ...rest } = s
+                await window.api.sessions.save({ ...rest, name: `${s.name} (복사)` })
+                await reload()
+              }}
+              onMove={async (s, group) => {
+                await window.api.sessions.save({ ...s, group })
+                await reload()
+              }}
             />
             <div className="resizer" onPointerDown={startResize} onDoubleClick={() => setSidebarWidth(250)} title="드래그하여 크기 조절 (더블클릭: 기본 크기)" />
           </>
@@ -549,6 +604,7 @@ export function App() {
         <SessionEditor
           session={editing === 'new' ? null : editing}
           groups={groups}
+          sessions={sessions}
           onClose={() => setEditing(null)}
           onSaved={async (s, connect) => {
             setEditing(null)

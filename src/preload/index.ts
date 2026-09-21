@@ -12,6 +12,9 @@ const api = {
     list: (): Promise<Session[]> => ipcRenderer.invoke('sessions:list'),
     save: (input: SessionInput): Promise<Session> => ipcRenderer.invoke('sessions:save', input),
     temp: (input: SessionInput): Promise<Session> => ipcRenderer.invoke('sessions:temp', input),
+    importSshConfig: (): Promise<number> => ipcRenderer.invoke('sessions:importSshConfig'),
+    exportAll: (): Promise<number> => ipcRenderer.invoke('sessions:export'),
+    importFile: (): Promise<number> => ipcRenderer.invoke('sessions:import'),
     delete: (id: string): Promise<void> => ipcRenderer.invoke('sessions:delete', id),
     pickKey: (): Promise<string | null> => ipcRenderer.invoke('sessions:pickKey')
   },

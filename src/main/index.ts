@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { mkdir as mkdirLocal, stat as statLocal } from 'node:fs/promises'
+import { mkdir as mkdirLocal, readFile, stat as statLocal, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
 import { connect } from 'node:net'
@@ -16,6 +16,7 @@ import { SessionLogs } from './logs'
 import { Secrets } from './secrets'
 import { SessionStore, validateSession } from './sessions'
 import { SettingsStore } from './settings'
+import { parseSshConfig } from './sshConfig'
 import { download, ensureRemoteDir, exists, listDir, mkdir, remoteJoin, removePath, renamePath, sftpError, upload, walkLocal, walkRemote } from './sftp'
 import { SshManager } from './ssh'
 
@@ -101,7 +102,8 @@ const ssh = new SshManager({
     }),
   onData: termData,
   onStatus: termStatus,
-  onTunnel: (status) => send('tunnels:status', status)
+  onTunnel: (status) => send('tunnels:status', status),
+  resolveSession: (id) => sessions.get(id) ?? tempSessions.get(id)
 })
 
 // 로컬 셸도 SSH와 같은 ssh:data / ssh:status 채널과 connId 공간을 쓴다. 터미널 화면은 둘을 구분하지 않는다.
@@ -313,6 +315,42 @@ function registerIpc(): void {
   registerSftpIpc()
   ipcMain.handle('sessions:list', () => sessions.list())
   ipcMain.handle('sessions:save', (_e, input: unknown) => sessions.save(input))
+  // ~/.ssh/config 가져오기. ProxyJump는 이름으로 적혀 있어서 저장한 뒤 id로 연결한다.
+  ipcMain.handle('sessions:importSshConfig', async () => {
+    const picked = await dialog.showOpenDialog(win!, {
+      title: 'SSH config 가져오기',
+      defaultPath: join(app.getPath('home'), '.ssh', 'config'),
+      properties: ['openFile', 'showHiddenFiles']
+    })
+    if (picked.canceled || !picked.filePaths[0]) return 0
+    const parsed = parseSshConfig(await readFile(picked.filePaths[0], 'utf8'))
+    const byName = new Map<string, string>()
+    for (const p of parsed) byName.set(p.name, sessions.save({ ...p, jumpSessionId: undefined }).id)
+    for (const p of parsed) {
+      const jumpId = p.jumpHostName ? byName.get(p.jumpHostName) : undefined
+      if (jumpId) sessions.save({ ...p, id: byName.get(p.name), jumpSessionId: jumpId })
+    }
+    return parsed.length
+  })
+  ipcMain.handle('sessions:export', async () => {
+    const picked = await dialog.showSaveDialog(win!, {
+      title: '세션 내보내기',
+      defaultPath: join(app.getPath('documents'), 'skiff-sessions.json'),
+      filters: [{ name: 'JSON', extensions: ['json'] }]
+    })
+    if (picked.canceled || !picked.filePath) return 0
+    // 비밀번호는 내보내지 않는다.
+    await writeFile(picked.filePath, JSON.stringify({ version: 1, sessions: sessions.list() }, null, 2), 'utf8')
+    return sessions.list().length
+  })
+  ipcMain.handle('sessions:import', async () => {
+    const picked = await dialog.showOpenDialog(win!, { title: '세션 가져오기', filters: [{ name: 'JSON', extensions: ['json'] }], properties: ['openFile'] })
+    if (picked.canceled || !picked.filePaths[0]) return 0
+    const data = JSON.parse(await readFile(picked.filePaths[0], 'utf8')) as { sessions?: unknown }
+    const list = Array.isArray(data.sessions) ? data.sessions : []
+    for (const s of list) sessions.save({ ...(s as object), id: undefined })
+    return list.length
+  })
   ipcMain.handle('sessions:temp', (_e, input: unknown) => {
     const valid = validateSession(input)
     const privateKeyPath = valid.privateKeyPath.replace(/^~(?=$|[\\/])/, homedir())
