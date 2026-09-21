@@ -10,7 +10,8 @@ node node_modules/electron/install.js   # npm이 install 스크립트를 건너�
 npm run dev        # 개발 실행
 npm test           # SSH 연결 계층 테스트 (로컬 ssh2 테스트 서버 사용)
 npm run typecheck
-npm run dist       # dist\SSH-Workbench-<버전>-portable.exe 생성 (설치 없이 실행)
+npm run dist       # dist\Skiff-<버전>-setup.exe (설치) + Skiff-<버전>-portable.exe
+npm run release    # 빌드 후 GitHub Releases에 올림 (환경변수 GH_TOKEN 필요)
 ```
 
 ## 진행 상황
@@ -42,6 +43,14 @@ npm run dist       # dist\SSH-Workbench-<버전>-portable.exe 생성 (설치 없
 `⚙ 설정`에서 터미널 글꼴·크기, 색 조합(어두움/밝음/Solarized Dark), 앱 화면 테마(밝게/어둡게),
 기억할 줄 수, 커서 모양·깜빡임, Ctrl+V 붙여넣기를 바꾼다. userData의 `settings.json`에 저장되고
 열려 있는 터미널에 바로 반영된다.
+
+## 배포
+
+- 설치본: `Skiff-<버전>-setup.exe` (설치 위치 선택 가능, 바탕화면 바로가기)
+- 무설치: `Skiff-<버전>-portable.exe`
+- 자동 업데이트: 설치본에서만 동작. 앱을 켤 때 GitHub Releases를 확인하고, 새 버전이 있으면 받아서 다음 실행에 적용
+- 새 버전 내는 법: `package.json` version 올리기 → `set GH_TOKEN=...` → `npm run release`
+- 코드 서명 인증서가 없어서 Windows SmartScreen 경고는 뜬다. "추가 정보 > 실행"
 
 ## 구조
 

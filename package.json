@@ -1,0 +1,87 @@
+{
+  "name": "skiff",
+  "productName": "Skiff",
+  "version": "0.6.0",
+  "private": true,
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "dist": "electron-vite build && electron-builder --win",
+    "release": "electron-vite build && electron-builder --win --publish always"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9",
+    "node-pty": "^1.1.0",
+    "ssh2": "^1.17.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/ssh2": "^1.15.6",
+    "@vitejs/plugin-react": "^5.2.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-search": "^0.16.0",
+    "@xterm/xterm": "^6.0.0",
+    "electron": "^44.4.2",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "typescript": "^7.0.2",
+    "vite": "^7.3.6",
+    "vitest": "^4.1.11"
+  },
+  "build": {
+    "appId": "dev.skiff.app",
+    "productName": "Skiff",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "out/**",
+      "package.json"
+    ],
+    "npmRebuild": false,
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "Skiff",
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "Skiff-${version}-setup.${ext}"
+    },
+    "mac": {
+      "target": "zip",
+      "icon": "build/icon.png"
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "build/icon.png",
+      "category": "Network"
+    },
+    "portable": {
+      "artifactName": "Skiff-${version}-portable.${ext}"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "seejune2",
+        "repo": "skiff"
+      }
+    ]
+  }
+}
