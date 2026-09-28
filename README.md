@@ -1,6 +1,7 @@
 # Skiff
 
-Electron + React + xterm.js + ssh2로 만드는 SSH 데스크톱 클라이언트. 계획과 범위는 `SSH_WORKBENCH_HANDOFF.md` 참고.
+Electron + React + xterm.js + ssh2로 만든 SSH·SFTP·터널·로컬 셸 데스크톱 앱.
+개발 기록과 함정은 `HISTORY.md`, 배포 전 확인은 `docs/점검목록.md`, 초기 기획은 `SSH_WORKBENCH_HANDOFF.md`.
 
 ## 실행
 
