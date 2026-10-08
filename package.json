@@ -1,7 +1,7 @@
 {
   "name": "skiff",
   "productName": "Skiff",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "private": true,
   "main": "out/main/index.js",
   "scripts": {
@@ -45,8 +45,14 @@
     },
     "files": [
       "out/**",
-      "package.json"
+      "package.json",
+      "!**/node_modules/**/*.{iobj,ipdb,pdb,lib,obj,tlog,exp}"
     ],
+    "electronLanguages": [
+      "ko",
+      "en-US"
+    ],
+    "compression": "maximum",
     "npmRebuild": false,
     "win": {
       "target": [

@@ -28,7 +28,12 @@ npm run release    # 빌드 후 GitHub Releases에 올림 (환경변수 GH_TOKEN
 - [x] 동시 입력: 체크한 탭에만 같은 키 입력 (`⇉ 동시 입력`, 탭·창 머리줄의 체크박스)
 - [x] 세션 로그: `문서\Skiff Logs`에 제어 문자 뺀 텍스트로 저장 (`● 로그`)
 - [x] 명령 스니펫: 저장해 두고 현재 탭(또는 동시 입력 대상)에 실행 (`⌘ 스니펫`)
-- [x] 원격 파일 편집: SFTP에서 파일 더블클릭하면 임시 폴더로 받아 기본 편집기로 열고, 저장하면 자동 업로드 (20MB 제한, 충돌 검사 없음)
+- [x] 원격 파일 편집: SFTP에서 파일 더블클릭하면 임시 폴더로 받아 기본 편집기로 열고, 저장하면 자동 업로드 (20MB 제한). 연 뒤 서버 파일이 바뀌었으면(mtime·크기) 덮어쓸지 묻는다
+- [x] 최근 접속: 세션 목록 맨 위 "최근"에 마지막으로 연 세션 5개 (이 PC의 localStorage)
+- [x] SFTP 권한: 목록에 8진수 권한(마우스를 올리면 rwx), 🔐로 바꾸기 (`chmod`)
+- [x] SFTP 이어받기: 끊긴 전송을 재시도하면 남은 임시 파일 뒤부터 이어서 한다 (원본 크기·수정 시각이 같을 때만)
+- [x] 내 PC 목록: SFTP 패널 `💻 내 PC`로 위에 로컬 폴더를 같이 보고, 버튼·더블클릭·끌어다 놓기로 주고받는다
+- [x] 하위 그룹: 그룹 이름에 `/`를 넣으면 (`서버/웹`) 세션 목록이 트리로 보인다
 - [x] 점프 호스트: 세션 편집에서 먼저 거칠 세션을 고르면 그 서버를 통해 접속
 - [x] 세션 관리: 복제(⧉), 그룹으로 드래그 이동, `~/.ssh/config` 가져오기, 세션 내보내기·가져오기(비밀번호 제외)
 
@@ -52,7 +57,11 @@ npm run release    # 빌드 후 GitHub Releases에 올림 (환경변수 GH_TOKEN
 - 설치본: `Skiff-<버전>-setup.exe` (설치 위치 선택 가능, 바탕화면 바로가기)
 - 무설치: `Skiff-<버전>-portable.exe`
 - 자동 업데이트: 설치본에서만 동작. 앱을 켤 때 GitHub Releases를 확인하고, 새 버전이 있으면 받아서 다음 실행에 적용
-- 새 버전 내는 법: `package.json` version 올리기 → `set GH_TOKEN=...` → `npm run release`
+- 새 버전 내는 법: `package.json` version 올리기 → 커밋 → `git tag v<버전>` → `git push --follow-tags`.
+  GitHub Actions(`.github/workflows/release.yml`)가 Windows·macOS·Linux에서 테스트·빌드해 Releases **초안**에 올린다. 초안을 Publish 해야 자동 업데이트가 본다.
+- 로컬에서 직접 올릴 때: `set GH_TOKEN=...` → `npm run release` (Windows만)
+- macOS: `Skiff-<버전>-arm64-mac.zip` (Apple Silicon만, 서명 없음 — 처음엔 Finder에서 오른쪽 클릭 > 열기, 안 되면 `xattr -cr Skiff.app`)
+- Linux: `Skiff-<버전>.AppImage`
 - 코드 서명 인증서가 없어서 Windows SmartScreen 경고는 뜬다. "추가 정보 > 실행"
 
 ## 구조

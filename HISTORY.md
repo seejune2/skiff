@@ -7,7 +7,7 @@
 ## 한 줄 요약
 
 Windows용 SSH/SFTP/터널/로컬 셸 데스크톱 앱. Electron + React + xterm.js + ssh2 + node-pty.
-저장소 `github.com/seejune2/skiff`, 현재 0.8.0, 테스트 22개.
+저장소 `github.com/seejune2/skiff`, 현재 0.9.0, 테스트 27개.
 
 ## 코드 지도
 
@@ -67,6 +67,8 @@ test/            vitest. 로컬에 ssh2 서버를 띄워서 진짜로 붙어 본
 - **electron-builder `artifactName`에 `${target}`을 쓰면 실패**한다. 타깃별(`nsis`, `portable`) 설정 안에서 지정한다.
 - **`npm run dist`에 `--win portable`이 박혀 있으면** NSIS는 만들어지지 않는다. 지금은 `--win`이다.
 - **ssh2 서버(테스트용)의 `info.cookie`는 16진수 문자열**이다. 바이너리로 착각하면 X11 테스트가 통과하지 않는다.
+- **Linux 빌드 확인**: Docker `node:22-bookworm`에서 빌드(`npm ci` → `npx electron-builder --linux`), 같은 컨테이너에 xvfb·libnss3·openssh-server를 깔고 `--no-sandbox --remote-debugging-port`로 띄워 `drive.mjs`로 조작했다. 진짜 OpenSSH에서 접속·SFTP·chmod·로컬 bash 확인.
+- **`.scratch/server.cjs`는 SETSTAT을 구현하지 않는다.** 앱에서 chmod를 누르면 "Operation unsupported"가 정상. 실제 값 확인은 `test/sftp.test.ts`.
 - **문서 폴더가 OneDrive로 리다이렉트**돼 있다. 로그는 `C:\Users\seeju\OneDrive\문서\Skiff Logs`에 쌓인다.
 
 ## 개발할 때 쓰는 것들
@@ -83,26 +85,24 @@ test/            vitest. 로컬에 ssh2 서버를 띄워서 진짜로 붙어 본
 
 ## 테스트
 
-`npm test` 22개. 다 로컬에서 진짜 서버를 띄운다.
+`npm test` 27개. 다 로컬에서 진짜 서버를 띄운다.
 SSH 인증·호스트 키 변경·한글·창 크기, X11 쿠키 교체, 터널 3종, SFTP 업로드·다운로드 해시와 취소,
-폴더 훑기, 점프 호스트, ssh config 파싱, 설정 검증, 하이라이터, 로그 제어 문자 제거.
+폴더 훑기, 이어받기, 하위 그룹 트리, chmod, 원격 편집 충돌 검사, 점프 호스트, ssh config 파싱, 설정 검증, 하이라이터, 로그 제어 문자 제거.
 
 자동 테스트로 못 잡는 것(실제 접속, X11 창, 드래그앤드롭, 파일 대화상자)은 `docs/점검목록.md`.
 
 ## 남은 일
 
-1. **첫 릴리스 올리기** — `GH_TOKEN` 만들고 `npm run release`. 그래야 자동 업데이트가 실제로 동작한다.
-2. 그룹 여러 단계(폴더 안 폴더), 최근 접속 목록
-3. SFTP 이어받기, 권한(chmod) 보기·바꾸기, 로컬 파일 목록 2단 보기
-4. 원격 편집 충돌 검사(열어 둔 사이 서버 파일이 바뀌었는지)
-5. macOS·Linux 빌드와 실제 검증 (X11은 XQuartz / 기본 X11)
-6. 코드 서명 인증서 (SmartScreen 경고 제거, 유료)
-7. 용량 줄이기 (설치본 112MB)
+1. **첫 릴리스 Publish** — 태그를 올리면 Actions가 Releases 초안을 만든다. 초안을 Publish 해야 자동 업데이트가 동작한다.
+2. macOS 실제 실행 확인 (Actions에서 테스트·빌드만 한다. Intel Mac 빌드 없음). X11은 XQuartz로 확인 필요
+3. 코드 서명 인증서 (SmartScreen·Gatekeeper 경고 제거, 유료)
+4. 용량: 설치본 107MB. 나머지는 거의 Electron 본체다. `dxcompiler.dll`(압축 6MB)은 WebGPU용이라 뺄 수 있어 보이지만 최신 Chromium이 화면 그리기에 쓸 수 있어 두었다
 
 ## 알려진 한계
 
-- 원격 파일 편집: 20MB 제한, 충돌 검사 없음
-- SFTP: 이어받기 없음, 비어 있지 않은 폴더 삭제 안 됨
+- 원격 파일 편집: 20MB 제한. 충돌 검사는 mtime(초)·크기 비교라 같은 초 안에 크기까지 같게 바뀌면 못 잡는다
+- SFTP: 비어 있지 않은 폴더 삭제 안 됨. 이어받기용 임시 파일(`이름.part-xxxxxxxx`)은 재시도하지 않고 지우면 서버·내 PC에 남는다. 같은 파일을 같은 곳에 동시에 두 번 올리면 임시 파일이 겹친다
+- 내 PC 목록: 드라이브 목록은 없다. 다른 드라이브는 경로 칸에 `D:\` 입력
 - 터널: 바인드 주소는 127.0.0.1 고정
 - X11: DISPLAY :0 고정, 로컬 X 서버 쿠키는 쓰지 않음
 - RDP: `mstsc` 실행만 한다. 실제 창 띄우는 것까지는 확인하지 않았다
