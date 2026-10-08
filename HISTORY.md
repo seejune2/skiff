@@ -7,7 +7,7 @@
 ## 한 줄 요약
 
 Windows용 SSH/SFTP/터널/로컬 셸 데스크톱 앱. Electron + React + xterm.js + ssh2 + node-pty.
-저장소 `github.com/seejune2/skiff`, 현재 0.9.0, 테스트 27개.
+저장소 `github.com/seejune2/skiff`, 현재 0.9.1, 테스트 27개.
 
 ## 코드 지도
 

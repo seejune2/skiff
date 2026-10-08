@@ -46,6 +46,8 @@ const MAX_KEY_SIZE = 64 * 1024
 
 export class SshManager {
   private readonly conns = new Map<string, Conn>()
+  // 로그인에 성공한 비밀번호는 앱이 켜져 있는 동안 기억해서 같은 세션의 새 탭에서 다시 묻지 않는다. 디스크에는 쓰지 않는다.
+  private readonly lastGood = new Map<string, string>()
 
   constructor(private readonly deps: SshDeps) {}
 
@@ -183,7 +185,7 @@ export class SshManager {
     let kiUsedPassword = false
 
     const askPassword = async (): Promise<string | null> => {
-      const saved = passwordTries === 0 ? this.deps.passwords.get(session.id) : null
+      const saved = passwordTries === 0 ? (this.deps.passwords.get(session.id) ?? this.lastGood.get(session.id) ?? null) : null
       passwordTries++
       if (saved !== null) return saved
       const reply = await this.deps.prompt(connId, {
@@ -226,6 +228,7 @@ export class SshManager {
 
     return {
       afterReady: () => {
+        if (lastPassword !== null) this.lastGood.set(session.id, lastPassword)
         if (passwordToSave !== null && lastPassword === passwordToSave) this.deps.passwords.save(session.id, passwordToSave)
       },
       config: {

@@ -93,7 +93,8 @@ async function prepareX11(): Promise<string | null> {
   if (process.platform !== 'win32') return '로컬 X 서버(:0)가 실행 중이 아닙니다. macOS는 XQuartz를 실행하세요.'
   if (!existsSync(VCXSRV)) return 'VcXsrv가 설치되어 있지 않습니다. winget install marha.VcXsrv 로 설치하세요.'
   // -ac(접근 제어 끄기)는 쓰지 않는다. VcXsrv는 X0.hosts의 localhost만 허용한다.
-  spawn(VCXSRV, [':0', '-multiwindow', '-clipboard', '-wgl'], { detached: true, stdio: 'ignore' }).unref()
+  // -noreset: 없으면 아래 포트 확인 접속이 끊길 때 서버가 리셋되다가 창 관리자 충돌로 VcXsrv가 꺼진다.
+  spawn(VCXSRV, [':0', '-multiwindow', '-clipboard', '-wgl', '-noreset'], { detached: true, stdio: 'ignore' }).unref()
   for (let i = 0; i < 20; i++) {
     await new Promise((r) => setTimeout(r, 250))
     if (await xServerUp()) return null

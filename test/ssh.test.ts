@@ -157,6 +157,12 @@ describe('SshManager', () => {
 
     t.manager.disconnect('c1')
     await t.until(() => lastState(t.statuses) === 'closed')
+
+    // 같은 세션으로 새 탭을 열면 앱이 켜져 있는 동안은 비밀번호를 다시 묻지 않는다.
+    await t.manager.connect(session(server.port), 'c2', 80, 24)
+    await t.until(() => t.statuses.at(-1)?.connId === 'c2' && lastState(t.statuses) === 'connected')
+    expect(t.prompts.map((p) => p.kind)).toEqual(['hostkey', 'password'])
+    t.manager.disconnect('c2')
   })
 
   it('저장된 호스트 키는 다시 묻지 않고, 바뀐 키는 이전 지문과 함께 묻고 거부하면 차단한다', async () => {
