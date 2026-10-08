@@ -38,10 +38,15 @@ const api = {
     mkdir: (connId: string, path: string): Promise<void> => ipcRenderer.invoke('sftp:mkdir', connId, path),
     rename: (connId: string, from: string, to: string): Promise<void> => ipcRenderer.invoke('sftp:rename', connId, from, to),
     delete: (connId: string, path: string, isDir: boolean): Promise<void> => ipcRenderer.invoke('sftp:delete', connId, path, isDir),
+    chmod: (connId: string, path: string, mode: number): Promise<void> => ipcRenderer.invoke('sftp:chmod', connId, path, mode),
     upload: (connId: string, dir: string): Promise<void> => ipcRenderer.invoke('sftp:upload', connId, dir),
     download: (connId: string, path: string): Promise<void> => ipcRenderer.invoke('sftp:download', connId, path),
     uploadFolder: (connId: string, dir: string): Promise<void> => ipcRenderer.invoke('sftp:uploadFolder', connId, dir),
     downloadFolder: (connId: string, path: string): Promise<void> => ipcRenderer.invoke('sftp:downloadFolder', connId, path),
+    /** "내 PC" 목록에서 고른 경로 */
+    uploadPaths: (connId: string, dir: string, paths: string[]): Promise<void> => ipcRenderer.invoke('sftp:uploadPaths', connId, dir, paths),
+    downloadTo: (connId: string, remote: string, dir: string, isDir: boolean): Promise<void> =>
+      ipcRenderer.invoke('sftp:downloadTo', connId, remote, dir, isDir),
     /** 탐색기에서 끌어다 놓은 파일·폴더 */
     uploadDropped: (connId: string, dir: string, files: File[]): Promise<void> =>
       ipcRenderer.invoke('sftp:uploadPaths', connId, dir, files.map((f) => webUtils.getPathForFile(f))),
@@ -49,6 +54,10 @@ const api = {
     retry: (id: string) => ipcRenderer.send('sftp:retry', id),
     forget: (id: string) => ipcRenderer.send('sftp:forget', id),
     onTransfer: (listener: (t: Transfer) => void) => on('sftp:transfer', listener)
+  },
+  localFiles: {
+    /** 빈 문자열이면 홈 폴더 */
+    list: (path: string): Promise<{ path: string; entries: RemoteEntry[] }> => ipcRenderer.invoke('localFiles:list', path)
   },
   edits: {
     open: (connId: string, remote: string): Promise<string> => ipcRenderer.invoke('edit:open', connId, remote),

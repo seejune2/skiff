@@ -1,13 +1,13 @@
 import { spawn } from 'node:child_process'
-import { mkdir as mkdirLocal, readFile, stat as statLocal, writeFile } from 'node:fs/promises'
+import { mkdir as mkdirLocal, readdir as readdirLocal, readFile, stat as statLocal, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
 import { connect } from 'node:net'
 import { homedir } from 'node:os'
-import { basename, dirname, isAbsolute, join, posix } from 'node:path'
+import { basename, dirname, isAbsolute, join, posix, resolve } from 'node:path'
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
 import { autoUpdater } from 'electron-updater'
-import type { ConnStatus, PromptBody, PromptReply, RemoteEdit, Session, Snippet, Transfer } from '../shared/types'
+import type { ConnStatus, PromptBody, PromptReply, RemoteEdit, RemoteEntry, Session, Snippet, Transfer } from '../shared/types'
 import { readJson, writeJson } from './jsonFile'
 import { KnownHosts } from './knownHosts'
 import { RemoteEdits } from './edits'
@@ -17,7 +17,7 @@ import { Secrets } from './secrets'
 import { SessionStore, validateSession } from './sessions'
 import { SettingsStore } from './settings'
 import { parseSshConfig } from './sshConfig'
-import { download, ensureRemoteDir, exists, listDir, mkdir, remoteJoin, removePath, renamePath, sftpError, upload, walkLocal, walkRemote } from './sftp'
+import { chmod, download, ensureRemoteDir, exists, listDir, mkdir, remoteJoin, removePath, renamePath, sftpError, upload, walkLocal, walkRemote } from './sftp'
 import { SshManager } from './ssh'
 
 const dataDir = app.getPath('userData')
@@ -51,7 +51,23 @@ const termData = (connId: string, data: Uint8Array) => {
   logs.write(connId, data)
   send('ssh:data', connId, data)
 }
-const edits = new RemoteEdits(join(app.getPath('temp'), 'skiff-edit'), (connId) => ssh.sftp(connId), (s) => send('edit:status', s))
+const edits = new RemoteEdits(
+  join(app.getPath('temp'), 'skiff-edit'),
+  (connId) => ssh.sftp(connId),
+  (s) => send('edit:status', s),
+  async (remote) =>
+    !!win &&
+    !win.isDestroyed() &&
+    (
+      await dialog.showMessageBox(win, {
+        type: 'warning',
+        buttons: ['덮어쓰기', '올리지 않기'],
+        defaultId: 1,
+        cancelId: 1,
+        message: `"${posix.basename(remote)}" 파일이 편집기로 연 뒤 서버에서 바뀌었습니다. 내가 저장한 내용으로 덮어쓸까요?`
+      })
+    ).response === 0
+)
 
 const termStatus = (status: ConnStatus) => {
   if (status.state === 'closed' || status.state === 'error') {
@@ -229,6 +245,38 @@ async function uploadPath(connId: string, local: string, dir: string): Promise<v
   }
 }
 
+/** 원격 파일이나 폴더 하나를 로컬 dir 아래로 받는다. */
+async function downloadInto(connId: string, remote: string, dir: string, isDir: boolean): Promise<void> {
+  const name = posix.basename(remote)
+  const root = join(dir, name)
+  if ((await statLocal(root).then(() => true, () => false)) && !(await askOverwrite(name, isDir))) return
+  if (!isDir) return queueDownload(connId, remote, root)
+  const sftp = await ssh.sftp(connId)
+  await mkdirLocal(root, { recursive: true })
+  for (const e of await walkRemote(sftp, remote)) {
+    const target = join(root, ...e.rel.split('/'))
+    if (e.isDir) await mkdirLocal(target, { recursive: true })
+    else queueDownload(connId, remoteJoin(remote, e.rel), target)
+  }
+}
+
+/** SFTP 패널의 "내 PC" 목록. 읽을 수 없는 항목(시스템 파일 등)은 뺀다. */
+async function listLocal(path: unknown): Promise<{ path: string; entries: RemoteEntry[] }> {
+  const dir = isPath(path) && isAbsolute(path) ? resolve(path) : app.getPath('home')
+  const entries = await Promise.all(
+    (await readdirLocal(dir)).map(async (name): Promise<RemoteEntry | null> => {
+      const st = await statLocal(join(dir, name)).catch(() => null)
+      return st && { name, type: st.isDirectory() ? 'dir' : 'file', size: st.size, mode: st.mode & 0o7777, mtime: Math.floor(st.mtimeMs / 1000) }
+    })
+  )
+  return {
+    path: dir,
+    entries: entries
+      .filter((e): e is RemoteEntry => !!e)
+      .sort((a, b) => Number(b.type === 'dir') - Number(a.type === 'dir') || a.name.localeCompare(b.name))
+  }
+}
+
 function registerSftpIpc(): void {
   const withSftp = <A extends unknown[], R>(fn: (sftp: Awaited<ReturnType<SshManager['sftp']>>, ...args: A) => Promise<R>) =>
     async (_e: unknown, connId: unknown, ...args: A) => {
@@ -247,6 +295,10 @@ function registerSftpIpc(): void {
   }))
   ipcMain.handle('sftp:rename', withSftp(async (sftp, from: unknown, to: unknown) => {
     if (isPath(from) && isPath(to)) await renamePath(sftp, from, to).catch(label('이름을 바꾸지 못했습니다'))
+  }))
+  ipcMain.handle('sftp:chmod', withSftp(async (sftp, path: unknown, mode: unknown) => {
+    if (isPath(path) && Number.isInteger(mode) && (mode as number) >= 0 && (mode as number) <= 0o7777)
+      await chmod(sftp, path, mode as number).catch(label('권한을 바꾸지 못했습니다'))
   }))
   ipcMain.handle('sftp:delete', withSftp(async (sftp, path: unknown, isDir: unknown) => {
     if (isPath(path)) await removePath(sftp, path, isDir === true).catch(label('삭제하지 못했습니다'))
@@ -270,19 +322,16 @@ function registerSftpIpc(): void {
   })
   ipcMain.handle('sftp:downloadFolder', async (_e, connId: unknown, remote: unknown) => {
     if (!isId(connId) || !isPath(remote)) return
-    const sftp = await ssh.sftp(connId)
+    await ssh.sftp(connId) // 연결이 없으면 대화상자를 띄우기 전에 실패한다.
     const picked = await dialog.showOpenDialog(win!, { title: '받을 위치 선택', defaultPath: app.getPath('downloads'), properties: ['openDirectory'] })
     if (picked.canceled || !picked.filePaths[0]) return
-    const name = posix.basename(remote)
-    const root = join(picked.filePaths[0], name)
-    if ((await statLocal(root).then(() => true, () => false)) && !(await askOverwrite(name, true))) return
-    await mkdirLocal(root, { recursive: true })
-    for (const e of await walkRemote(sftp, remote)) {
-      const target = join(root, ...e.rel.split('/'))
-      if (e.isDir) await mkdirLocal(target, { recursive: true })
-      else queueDownload(connId, remoteJoin(remote, e.rel), target)
-    }
+    await downloadInto(connId, remote, picked.filePaths[0], true)
   })
+  // "내 PC" 목록에서 고른 폴더로 바로 받는다. 같은 이름이 있으면 덮어쓸지 묻는다.
+  ipcMain.handle('sftp:downloadTo', async (_e, connId: unknown, remote: unknown, dir: unknown, isDir: unknown) => {
+    if (isId(connId) && isPath(remote) && isPath(dir) && isAbsolute(dir)) await downloadInto(connId, remote, dir, isDir === true)
+  })
+  ipcMain.handle('localFiles:list', (_e, path: unknown) => listLocal(path))
   ipcMain.handle('sftp:download', async (_e, connId: unknown, remote: unknown) => {
     if (!isId(connId) || !isPath(remote)) return
     const name = remote.split('/').pop()!

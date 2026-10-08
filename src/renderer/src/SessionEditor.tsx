@@ -54,7 +54,7 @@ export function SessionEditor({ session, groups, sessions, onSaved, onClose }: P
           </label>
           <label className="field span2">
             <span>그룹</span>
-            <input list="groups" value={form.group} onChange={(e) => set('group', e.target.value)} />
+            <input list="groups" value={form.group} placeholder="하위 그룹은 / 로 구분 (예: 서버/웹)" onChange={(e) => set('group', e.target.value)} />
             <datalist id="groups">
               {groups.map((g) => (
                 <option key={g} value={g} />

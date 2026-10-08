@@ -4,9 +4,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, expect, it } from 'vitest'
 import { Client, Server, utils, type SFTPWrapper } from 'ssh2'
-import { download, ensureRemoteDir, listDir, sftpError, upload, walkLocal, walkRemote } from '../src/main/sftp'
+import { chmod, download, ensureRemoteDir, listDir, partName, sftpError, upload, walkLocal, walkRemote } from '../src/main/sftp'
+import { RemoteEdits } from '../src/main/edits'
+import type { RemoteEdit } from '../src/shared/types'
 
 const { STATUS_CODE, flagsToString } = utils.sftp
+
+/** 서버가 받은 SETSTAT 권한. Windows에서는 fs.chmod가 권한 비트를 대부분 무시해서 받은 값으로 확인한다. */
+const setstats: { path: string; mode?: number }[] = []
 
 /** 임시 폴더를 루트(/)로 쓰는 최소 SFTP 서버. 실제 OpenSSH처럼 대상이 있으면 rename을 거부한다. */
 function startSftpServer(root: string) {
@@ -69,6 +74,7 @@ function startSftpServer(root: string) {
           })
         )
         sftp.on('REMOVE', (id, path) => tryDo(id, () => fs.unlinkSync(local(path))))
+        sftp.on('SETSTAT', (id, path, a) => tryDo(id, () => setstats.push({ path, mode: a.mode })))
         sftp.on('MKDIR', (id, path) => tryDo(id, () => fs.mkdirSync(local(path))))
       })
     )
@@ -165,4 +171,81 @@ it('SFTP 오류를 한국어로 바꾼다', () => {
   expect(sftpError(new Error('Failure'), '삭제하지 못했습니다').message).toContain('비어 있는지')
   // 모르는 오류는 원문을 남긴다
   expect(sftpError(new Error('Weird error 42'), '업로드 실패').message).toBe('업로드 실패: Weird error 42')
+})
+
+it('목록에 권한 비트가 오고, chmod가 서버에 그 값을 보낸다', async () => {
+  fs.writeFileSync(join(root, 'perm.txt'), 'x')
+  const { entries } = await listDir(sftp, '/')
+  expect(entries.find((e) => e.name === 'perm.txt')!.mode).toBe(fs.statSync(join(root, 'perm.txt')).mode & 0o7777)
+  await chmod(sftp, '/perm.txt', 0o640)
+  expect(setstats.at(-1)).toEqual({ path: '/perm.txt', mode: 0o640 })
+})
+
+it('원격 편집: 연 뒤 서버 파일이 바뀌었으면 묻고, 거절하면 올리지 않는다', async () => {
+  fs.writeFileSync(join(root, 'edit.txt'), 'v1')
+  const statuses: RemoteEdit[] = []
+  let answer = false
+  const asked: string[] = []
+  const edits = new RemoteEdits(
+    join(localDir, 'edit-tmp'),
+    async () => sftp,
+    (s) => statuses.push(s),
+    async (remote) => (asked.push(remote), answer)
+  )
+  const local = await edits.open('c1', '/edit.txt')
+  const waitFor = async (state: RemoteEdit['state']) => {
+    const from = statuses.length
+    for (let i = 0; i < 50 && !statuses.slice(from).some((s) => s.state === state); i++) await new Promise((r) => setTimeout(r, 100))
+    expect(statuses.slice(from).map((s) => s.state)).toContain(state)
+  }
+
+  // 서버 쪽이 바뀌지 않았으면 묻지 않고 올린다.
+  fs.writeFileSync(local, 'mine1')
+  await waitFor('saved')
+  expect(asked).toEqual([])
+  expect(fs.readFileSync(join(root, 'edit.txt'), 'utf8')).toBe('mine1')
+
+  // 다른 사람이 서버 파일을 바꿈 (크기가 달라 mtime이 같아도 잡힌다)
+  fs.writeFileSync(join(root, 'edit.txt'), 'someone else')
+  fs.writeFileSync(local, 'mine2')
+  await waitFor('error')
+  expect(asked).toEqual(['/edit.txt'])
+  expect(fs.readFileSync(join(root, 'edit.txt'), 'utf8')).toBe('someone else')
+
+  // 다시 저장하고 덮어쓰기를 고르면 올라간다.
+  answer = true
+  fs.writeFileSync(local, 'mine3')
+  await waitFor('saved')
+  expect(fs.readFileSync(join(root, 'edit.txt'), 'utf8')).toBe('mine3')
+  await edits.close(local)
+})
+
+it('끊겨서 남은 임시 파일이 있으면 그 뒤부터 이어서 올리고 받는다', async () => {
+  const data = randomBytes(2 * 1024 * 1024)
+  const src = join(localDir, 'resume.bin')
+  fs.writeFileSync(src, data)
+  const half = data.length / 2
+
+  // 올리다 끊긴 상태: 서버에 앞 절반짜리 임시 파일
+  const st = fs.statSync(src)
+  fs.writeFileSync(join(root, partName('resume.bin', st.size, st.mtimeMs)), data.subarray(0, half))
+  const firsts: number[] = []
+  await upload(sftp, src, '/resume.bin', (done) => firsts.push(done), new AbortController().signal)
+  expect(firsts[0]).toBeGreaterThan(half)
+  expect(hash(join(root, 'resume.bin'))).toBe(hash(src))
+  expect(fs.readdirSync(root).filter((n) => n.startsWith('resume.bin.part'))).toEqual([])
+
+  // 받다 끊긴 상태: 로컬에 앞 절반짜리 임시 파일
+  const dst = join(localDir, 'resume-down.bin')
+  const rst = fs.statSync(join(root, 'resume.bin'))
+  fs.writeFileSync(partName(dst, rst.size, rst.mtimeMs / 1000), data.subarray(0, half))
+  const downs: number[] = []
+  await download(sftp, '/resume.bin', dst, (done) => downs.push(done), new AbortController().signal)
+  expect(downs[0]).toBeGreaterThan(half)
+  expect(hash(dst)).toBe(hash(src))
+
+  // 원본이 바뀌면 이름이 달라져서 처음부터 한다.
+  fs.writeFileSync(src, 'new')
+  await upload(sftp, src, '/resume.bin', noop, new AbortController().signal)
+  expect(fs.readFileSync(join(root, 'resume.bin'), 'utf8')).toBe('new')
 })

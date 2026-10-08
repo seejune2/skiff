@@ -641,6 +641,20 @@ body.resizing {
   font-family: 'Cascadia Mono', Consolas, monospace;
   font-size: 12px;
 }
+.sftp-pc {
+  display: flex;
+  flex-direction: column;
+  height: 40%;
+  min-height: 120px;
+  border-bottom: 1px solid var(--border);
+}
+.sftp-caption {
+  align-self: center;
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
 .sftp-list {
   flex: 1;
   overflow-y: auto;
@@ -671,6 +685,14 @@ body.resizing {
 .sftp-edit {
   flex: 1;
   padding: 2px 4px;
+}
+.sftp-mode-edit {
+  display: flex;
+  flex-shrink: 0;
+  width: 5em;
+}
+.sftp-mode-edit .sftp-edit {
+  min-width: 0;
 }
 .sftp-meta {
   font-size: 11px;

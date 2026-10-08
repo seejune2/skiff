@@ -42,6 +42,7 @@ const store = (key: string, value: unknown) => {
 }
 
 const MAX_PANES = 8
+const RECENT_MAX = 5
 /** 자동 재접속 간격(초). 마지막 값에서 멈춘다. */
 const RETRY_DELAYS = [2, 5, 10, 20, 30]
 
@@ -87,6 +88,8 @@ export function App() {
   const [compact, setCompact] = useState(() => load('sidebarCompact', false))
   const [sidebarHidden, setSidebarHidden] = useState(() => load('sidebarHidden', false))
   const [sftpOpen, setSftpOpen] = useState(() => load('sftpOpen', true))
+  /** 최근에 연 저장 세션 id. 이 PC에서만 기억한다. */
+  const [recent, setRecent] = useState<string[]>(() => load('recentSessions', []))
   const [profiles, setProfiles] = useState<LocalProfile[]>([])
   // 탭 바는 가로 스크롤이라 메뉴를 화면 좌표(fixed)로 띄운다.
   const [newMenu, setNewMenu] = useState<{ x: number; y: number } | null>(null)
@@ -96,6 +99,7 @@ export function App() {
   useEffect(() => store('sidebarWidth', sidebarWidth), [sidebarWidth])
   useEffect(() => store('sidebarCompact', compact), [compact])
   useEffect(() => store('sidebarHidden', sidebarHidden), [sidebarHidden])
+  useEffect(() => store('recentSessions', recent), [recent])
 
   const startResize = (e: React.PointerEvent) => {
     const startX = e.clientX
@@ -151,6 +155,7 @@ export function App() {
   }, [])
 
   const openTab = (session: Session) => {
+    if (!session.temp) setRecent((old) => [session.id, ...old.filter((id) => id !== session.id)].slice(0, RECENT_MAX))
     if (session.protocol === 'rdp') {
       window.api.rdp.open(session.id).catch((err: Error) => window.alert(cleanError(err)))
       return
@@ -437,6 +442,7 @@ export function App() {
               onToggleCompact={() => setCompact(!compact)}
               onHide={() => setSidebarHidden(true)}
               sessions={sessions}
+              recentIds={recent}
               selectedId={selectedId}
               onSelect={setSelectedId}
               onConnect={openTab}

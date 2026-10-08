@@ -50,7 +50,8 @@ export function validateSession(input: unknown): SessionInput {
     id: typeof o.id === 'string' ? o.id : undefined,
     protocol,
     name: text(o.name) || (username ? `${username}@${host}` : host),
-    group: text(o.group),
+    // 하위 그룹은 '/'로 구분한다. 앞뒤 공백과 빈 단계는 없앤다.
+    group: text(o.group).split('/').map((p) => p.trim()).filter(Boolean).join('/'),
     host,
     port,
     username,

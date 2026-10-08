@@ -93,6 +93,8 @@ export interface RemoteEntry {
   name: string
   type: 'dir' | 'file' | 'link'
   size: number
+  /** 권한 비트 (예: 0o644) */
+  mode: number
   /** 초 단위 유닉스 시간 */
   mtime: number
 }

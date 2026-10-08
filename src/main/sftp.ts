@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
 import { readdir, rename, stat, unlink } from 'node:fs/promises'
 import { join, posix } from 'node:path'
@@ -42,6 +42,7 @@ export async function listDir(sftp: SFTPWrapper, path: string): Promise<{ path: 
         name: f.filename,
         type: kind === S_IFDIR ? 'dir' : kind === S_IFLNK ? 'link' : 'file',
         size: f.attrs.size,
+        mode: f.attrs.mode & 0o7777,
         mtime: f.attrs.mtime
       }
     })
@@ -55,7 +56,12 @@ export const exists = (sftp: SFTPWrapper, path: string) =>
     () => false
   )
 
+/** 바뀌었는지 비교할 값 (mtime:크기) */
+export const remoteStamp = (sftp: SFTPWrapper, path: string) =>
+  call<{ mtime: number; size: number }>((cb) => sftp.stat(path, cb)).then((a) => `${a.mtime}:${a.size}`)
+
 export const mkdir = (sftp: SFTPWrapper, path: string) => call((cb) => sftp.mkdir(path, cb))
+export const chmod = (sftp: SFTPWrapper, path: string, mode: number) => call((cb) => sftp.chmod(path, mode, cb))
 export const renamePath = (sftp: SFTPWrapper, from: string, to: string) => call((cb) => sftp.rename(from, to, cb))
 /** 폴더는 비어 있을 때만 지운다. */
 // ponytail: 재귀 삭제 없음. 필요해지면 심볼릭 링크를 따라가지 않는 재귀로 추가.
@@ -64,15 +70,24 @@ export const removePath = (sftp: SFTPWrapper, path: string, isDir: boolean) =>
 
 type Progress = (done: number, total: number) => void
 
-/** 임시 이름으로 올린 뒤 끝나면 최종 이름으로 바꾼다. 실패하거나 취소되면 임시 파일을 지운다. */
+/**
+ * 받거나 올리는 중인 임시 파일 이름. 원본의 크기·수정 시각이 이름에 들어가서,
+ * 끊긴 뒤 다시 시도할 때 같은 이름이 있으면 원본이 그대로라는 뜻이니 이어서 한다.
+ */
+export const partName = (path: string, size: number, mtime: number) =>
+  `${path}.part-${createHash('sha1').update(`${size}:${Math.floor(mtime)}`).digest('hex').slice(0, 8)}`
+
+/** 임시 이름으로 올린 뒤 끝나면 최종 이름으로 바꾼다. 취소하면 임시 파일을 지우고, 오류면 남겨 두었다가 재시도 때 이어 올린다. */
 export async function upload(sftp: SFTPWrapper, local: string, remote: string, onProgress: Progress, signal: AbortSignal) {
-  const total = (await stat(local)).size
-  const tmp = `${remote}.part-${randomBytes(4).toString('hex')}`
-  let done = 0
-  const src = createReadStream(local)
+  const { size: total, mtimeMs } = await stat(local)
+  const tmp = partName(remote, total, mtimeMs)
+  const part = await call<{ size: number }>((cb) => sftp.stat(tmp, cb)).catch(() => null)
+  const start = part && part.size <= total ? part.size : 0
+  let done = start
+  const src = createReadStream(local, { start })
   src.on('data', (c) => onProgress((done += c.length), total))
   try {
-    await pipeline(src, sftp.createWriteStream(tmp), { signal })
+    await pipeline(src, sftp.createWriteStream(tmp, { flags: start ? 'r+' : 'w', start }), { signal })
     // 대상이 있으면 OpenSSH의 덮어쓰기 rename을 쓰고, 없는 서버면 지우고 바꾼다.
     try {
       await call((cb) => sftp.ext_openssh_rename(tmp, remote, cb))
@@ -81,22 +96,24 @@ export async function upload(sftp: SFTPWrapper, local: string, remote: string, o
       await renamePath(sftp, tmp, remote)
     }
   } catch (err) {
-    await call((cb) => sftp.unlink(tmp, cb)).catch(() => {})
+    if (signal.aborted) await call((cb) => sftp.unlink(tmp, cb)).catch(() => {})
     throw err
   }
 }
 
 export async function download(sftp: SFTPWrapper, remote: string, local: string, onProgress: Progress, signal: AbortSignal) {
-  const { size: total } = await call<{ size: number }>((cb) => sftp.stat(remote, cb))
-  const tmp = `${local}.part`
-  let done = 0
-  const src = sftp.createReadStream(remote)
+  const { size: total, mtime } = await call<{ size: number; mtime: number }>((cb) => sftp.stat(remote, cb))
+  const tmp = partName(local, total, mtime)
+  const part = await stat(tmp).catch(() => null)
+  const start = part && part.size <= total ? part.size : 0
+  let done = start
+  const src = sftp.createReadStream(remote, { start })
   src.on('data', (c: Buffer) => onProgress((done += c.length), total))
   try {
-    await pipeline(src, createWriteStream(tmp), { signal })
+    await pipeline(src, createWriteStream(tmp, { flags: start ? 'a' : 'w' }), { signal })
     await rename(tmp, local)
   } catch (err) {
-    await unlink(tmp).catch(() => {})
+    if (signal.aborted) await unlink(tmp).catch(() => {})
     throw err
   }
 }

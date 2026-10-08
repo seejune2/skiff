@@ -4,7 +4,7 @@ import { mkdir, readFile, rm } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import type { SFTPWrapper } from 'ssh2'
 import type { RemoteEdit } from '../shared/types'
-import { download, upload } from './sftp'
+import { download, remoteStamp, upload } from './sftp'
 
 /** 편집기가 저장할 때 임시 파일을 거치는 경우가 많아, 조금 기다렸다가 한 번만 올린다. */
 const SAVE_DEBOUNCE = 400
@@ -17,6 +17,8 @@ interface Edit {
   watcher: FSWatcher
   timer?: NodeJS.Timeout
   hash: string
+  /** 마지막으로 받거나 올린 때의 서버 파일 mtime·크기. 다르면 그사이 누가 바꾼 것. */
+  stamp: string
 }
 
 const hashOf = (buf: Buffer) => createHash('sha256').update(buf).digest('hex')
@@ -27,7 +29,9 @@ export class RemoteEdits {
   constructor(
     private readonly tempDir: string,
     private readonly getSftp: (connId: string) => Promise<SFTPWrapper>,
-    private readonly onStatus: (status: RemoteEdit) => void
+    private readonly onStatus: (status: RemoteEdit) => void,
+    /** 서버 파일이 바뀌었을 때 덮어쓸지 묻는다. */
+    private readonly confirmOverwrite: (remote: string) => Promise<boolean>
   ) {}
 
   list(): RemoteEdit[] {
@@ -48,6 +52,7 @@ export class RemoteEdits {
       throw new Error('20MB보다 큰 파일은 편집으로 열지 않습니다. 다운로드를 쓰세요.')
     }
     const hash = hashOf(await readFile(local))
+    const stamp = await remoteStamp(sftp, remote)
     // 편집기가 파일을 지웠다 다시 만드는 경우까지 잡으려고 폴더를 감시한다.
     const watcher = watch(dirname(local), (_type, name) => {
       if (name && basename(name) !== basename(local)) return
@@ -56,7 +61,7 @@ export class RemoteEdits {
       clearTimeout(edit.timer)
       edit.timer = setTimeout(() => void this.push(local), SAVE_DEBOUNCE)
     })
-    this.edits.set(local, { connId, remote, local, watcher, hash })
+    this.edits.set(local, { connId, remote, local, watcher, hash, stamp })
     this.report(this.edits.get(local)!, 'open')
     return local
   }
@@ -73,10 +78,16 @@ export class RemoteEdits {
       const data = await readFile(local)
       const hash = hashOf(data)
       if (hash === edit.hash) return
+      const sftp = await this.getSftp(edit.connId)
+      // ponytail: mtime은 초 단위라 같은 초 안에 크기도 같게 바뀌면 못 잡는다. 필요하면 서버 파일 해시 비교로.
+      if ((await remoteStamp(sftp, edit.remote).catch(() => '')) !== edit.stamp && !(await this.confirmOverwrite(edit.remote))) {
+        // hash를 그대로 두어 다시 저장하면 다시 묻는다.
+        return this.report(edit, 'error', '서버 파일이 바뀌어 올리지 않았습니다. 다시 저장하면 다시 묻습니다.')
+      }
       this.report(edit, 'uploading')
-      // ponytail: 서버 쪽이 그사이 바뀌었는지는 보지 않는다. 충돌 검사는 필요해지면 mtime 비교로.
-      await upload(await this.getSftp(edit.connId), local, edit.remote, () => {}, new AbortController().signal)
+      await upload(sftp, local, edit.remote, () => {}, new AbortController().signal)
       edit.hash = hash
+      edit.stamp = await remoteStamp(sftp, edit.remote)
       this.report(edit, 'saved')
     } catch (err) {
       this.report(edit, 'error', (err as Error).message)
